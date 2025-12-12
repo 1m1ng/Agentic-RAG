@@ -3,3 +3,7 @@ __pycache__/
 .cache/
 .venv/
 .env
+input/
+output/
+eval_sets/
+knowledge_bases/

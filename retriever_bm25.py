@@ -3,12 +3,13 @@ BM25 检索引擎
 使用 BM25 算法对中文文档进行检索，支持元数据溯源
 """
 
+import os
 import jieba
 from rank_bm25 import BM25Okapi
 from document_loader import load_and_chunk_docx, DocxChunk
 
 # 全局变量：文档路径
-DOCX_FILE_PATH = "光明区光明街道旅游手册.docx"
+DOCX_FILE_PATH = "input/光明区光明街道旅游手册.docx"
 
 
 class BM25Retriever:
@@ -22,17 +23,50 @@ class BM25Retriever:
         # 关闭 jieba 的调试日志
         jieba.setLogLevel(20)
         
-        # 加载文档数据块
-        self.chunks: list[DocxChunk] = load_and_chunk_docx(DOCX_FILE_PATH)
+        # 初始化空列表
+        self.chunks: list[DocxChunk] = []
+        self.tokenized_corpus = []
+        self.bm25 = None
         
-        # 提取文本语料库
-        corpus = [chunk['text'] for chunk in self.chunks]
-        
-        # 对语料库进行中文分词
-        tokenized_corpus = [list(jieba.cut(doc)) for doc in corpus]
-        
-        # 构建 BM25 索引
-        self.bm25 = BM25Okapi(tokenized_corpus)
+        # 如果文件存在则加载
+        if DOCX_FILE_PATH and os.path.exists(DOCX_FILE_PATH):
+            self.chunks = load_and_chunk_docx(DOCX_FILE_PATH)
+            corpus = [chunk['text'] for chunk in self.chunks]
+            self.tokenized_corpus = [list(jieba.cut(doc)) for doc in corpus]
+            self.bm25 = BM25Okapi(self.tokenized_corpus)
+    
+    def add_document(self, text: str, metadata: dict):
+        """添加文档到索引"""
+        chunk: DocxChunk = {"text": text, "metadata": metadata}
+        self.chunks.append(chunk)
+        tokens = list(jieba.cut(text))
+        self.tokenized_corpus.append(tokens)
+        # 重建 BM25 索引
+        self.bm25 = BM25Okapi(self.tokenized_corpus)
+    
+    def clear(self):
+        """清空索引"""
+        self.chunks = []
+        self.tokenized_corpus = []
+        self.bm25 = None
+    
+    def save(self, path: str):
+        """保存索引到文件"""
+        import pickle
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, "chunks.pkl"), "wb") as f:
+            pickle.dump(self.chunks, f)
+        with open(os.path.join(path, "tokenized_corpus.pkl"), "wb") as f:
+            pickle.dump(self.tokenized_corpus, f)
+    
+    def load(self, path: str):
+        """从文件加载索引"""
+        import pickle
+        with open(os.path.join(path, "chunks.pkl"), "rb") as f:
+            self.chunks = pickle.load(f)
+        with open(os.path.join(path, "tokenized_corpus.pkl"), "rb") as f:
+            self.tokenized_corpus = pickle.load(f)
+        self.bm25 = BM25Okapi(self.tokenized_corpus)
     
     def search(self, query: str, top_k: int = 3) -> list[DocxChunk]:
         """
@@ -45,6 +79,10 @@ class BM25Retriever:
         Returns:
             按相关性排序的文档块列表（包含文本和元数据）
         """
+        # 检查 BM25 索引是否已初始化
+        if self.bm25 is None:
+            return []
+        
         # 对查询进行中文分词
         tokenized_query = list(jieba.cut(query))
         

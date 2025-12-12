@@ -43,16 +43,49 @@ class VectorRetriever:
         print("正在加载 BGE 嵌入模型...")
         self.model = SentenceTransformer(MODEL_NAME, device='cpu')
         
+        # 初始化空索引
+        self.chunks: list[DocxChunk] = []
+        d = self.model.get_sentence_embedding_dimension()
+        self.index = faiss.IndexFlatL2(d)
+        
         # 检查是否存在已保存的索引
-        if not force_rebuild and self._check_index_exists():
+        if not force_rebuild and DOCX_FILE_PATH and self._check_index_exists():
             print("发现已保存的索引，正在加载...")
             self._load_index()
             print(f"索引加载完成，共 {len(self.chunks)} 个文档块。")
-        else:
+        elif DOCX_FILE_PATH and os.path.exists(DOCX_FILE_PATH):
             print("未找到已保存的索引或强制重建，正在创建新索引...")
             self._build_index()
             self._save_index()
             print("索引创建并保存完成。")
+    
+    def add_document(self, text: str, metadata: dict):
+        """添加文档到索引"""
+        chunk: DocxChunk = {"text": text, "metadata": metadata}
+        self.chunks.append(chunk)
+        embedding = self.model.encode([text])
+        self.index.add(embedding.astype('float32'))  # type: ignore
+    
+    def clear(self):
+        """清空索引"""
+        self.chunks = []
+        d = self.model.get_sentence_embedding_dimension()
+        self.index = faiss.IndexFlatL2(d)
+    
+    def save(self, path: str):
+        """保存索引到文件"""
+        import pickle
+        os.makedirs(path, exist_ok=True)
+        faiss.write_index(self.index, os.path.join(path, "faiss.index"))
+        with open(os.path.join(path, "chunks.pkl"), "wb") as f:
+            pickle.dump(self.chunks, f)
+    
+    def load(self, path: str):
+        """从文件加载索引"""
+        import pickle
+        self.index = faiss.read_index(os.path.join(path, "faiss.index"))
+        with open(os.path.join(path, "chunks.pkl"), "rb") as f:
+            self.chunks = pickle.load(f)
     
     def _check_index_exists(self) -> bool:
         """检查索引文件是否存在"""

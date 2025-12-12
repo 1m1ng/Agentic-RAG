@@ -35,6 +35,45 @@ class HybridRetriever:
         
         print("Hybrid Retriever initialized.")
     
+    def add_document(self, text: str, metadata: dict):
+        """
+        添加文档到检索器
+        
+        Args:
+            text: 文档文本
+            metadata: 文档元数据
+        """
+        self.bm25.add_document(text, metadata)
+        self.vector.add_document(text, metadata)
+    
+    def clear(self):
+        """清空所有索引"""
+        self.bm25.clear()
+        self.vector.clear()
+    
+    def save_index(self, index_dir: str):
+        """
+        保存索引到指定目录
+        
+        Args:
+            index_dir: 索引保存目录
+        """
+        import os
+        os.makedirs(index_dir, exist_ok=True)
+        self.bm25.save(os.path.join(index_dir, "bm25"))
+        self.vector.save(os.path.join(index_dir, "vector"))
+    
+    def load_index(self, index_dir: str):
+        """
+        从指定目录加载索引
+        
+        Args:
+            index_dir: 索引加载目录
+        """
+        import os
+        self.bm25.load(os.path.join(index_dir, "bm25"))
+        self.vector.load(os.path.join(index_dir, "vector"))
+    
     def search(self, query: str, top_k: int = 3) -> list[DocxChunk]:
         """
         使用混合检索策略检索相关文档块

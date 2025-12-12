@@ -7,6 +7,8 @@ import asyncio
 import os
 import json
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from agno.models.openai import OpenAIChat
 from agno.agent import Agent
 from retriever_hybrid import HybridRetriever
@@ -201,8 +203,13 @@ async def evaluate_answer(client: OpenAIChat, query: str, generated_answer: str,
 class AgenticRAG:
     """Agentic RAG 系统核心类"""
     
-    def __init__(self):
-        """初始化 RAG Agent"""
+    def __init__(self, max_workers: int = 4):
+        """
+        初始化 RAG Agent
+        
+        Args:
+            max_workers: 线程池最大工作线程数
+        """
         print("正在初始化 RAG Agent...")
         
         # 初始化 Kimi 客户端
@@ -212,11 +219,63 @@ class AgenticRAG:
         print("正在初始化 Hybrid Retriever (这可能需要1-2分钟)...")
         self.retriever = HybridRetriever()
         
+        # 初始化线程池
+        self.thread_pool = ThreadPoolExecutor(max_workers=max_workers)
+        self.chunks_lock = Lock()
+        
         print("Agent 初始化完成。")
+    
+    def _search_single_query(self, args: tuple) -> list:
+        """
+        单个查询的检索（用于多线程执行）
+        
+        Args:
+            args: (query_index, query) 元组
+            
+        Returns:
+            检索结果列表
+        """
+        query_index, query = args
+        print(f"  - 正在检索子查询 {query_index}/[总数]: '{query}'")
+        return self.retriever.search(query, top_k=10)
+    
+    def _parallel_search(self, rewritten_queries: list[str]) -> dict:
+        """
+        并行执行多个查询的检索
+        
+        Args:
+            rewritten_queries: 重写后的查询列表
+            
+        Returns:
+            去重后的候选块字典
+        """
+        all_candidate_chunks: dict = {}
+        
+        # 准备任务列表
+        tasks = [(i + 1, query) for i, query in enumerate(rewritten_queries)]
+        
+        # 使用线程池并行执行检索
+        futures = []
+        for task in tasks:
+            future = self.thread_pool.submit(self._search_single_query, task)
+            futures.append(future)
+        
+        # 收集结果并去重
+        for future in as_completed(futures):
+            try:
+                results = future.result()
+                for chunk in results:
+                    para_id = chunk['metadata']['paragraph_id']
+                    with self.chunks_lock:
+                        all_candidate_chunks[para_id] = chunk
+            except Exception as e:
+                print(f"检索任务出错: {e}")
+        
+        return all_candidate_chunks
     
     async def run(self, user_query: str, enable_evaluation: bool = True):
         """
-        执行完整的 RAG 流水线
+        执行完整的 RAG 流水线（使用多线程加速）
         
         Args:
             user_query: 用户的原始查询
@@ -234,21 +293,11 @@ class AgenticRAG:
             print(f"  {idx}. {query}")
         print()
         
-        # ==================== 步骤 2: 混合检索 ====================
-        print("--- 步骤 2: Agent 正在执行混合检索 ---")
+        # ==================== 步骤 2: 混合检索（多线程并行执行） ====================
+        print(f"--- 步骤 2: Agent 正在执行混合检索（使用多线程并行处理 {len(rewritten_queries)} 个查询）---")
         
-        # 使用字典去重候选块
-        all_candidate_chunks: dict[int, DocxChunk] = {}
-        
-        # 对每个重写的查询进行检索
-        for i, query in enumerate(rewritten_queries, 1):
-            print(f"  - 正在检索子查询 {i}/{len(rewritten_queries)}: '{query}'")
-            results = self.retriever.search(query, top_k=10)
-            
-            # 使用 paragraph_id 进行去重
-            for chunk in results:
-                para_id = chunk['metadata']['paragraph_id']
-                all_candidate_chunks[para_id] = chunk
+        # 并行执行检索
+        all_candidate_chunks = self._parallel_search(rewritten_queries)
         
         # 获取所有唯一候选块
         final_candidates = list(all_candidate_chunks.values())
@@ -280,6 +329,7 @@ class AgenticRAG:
             
             # 拼接上下文字符串
             context_str += f"[文档片段 {idx}]\n{chunk['text']}\n\n"
+        
         
         # ==================== 步骤 4: 生成答案 ====================
         print("--- 步骤 4: Agent 正在基于上下文生成答案 ---\n")
@@ -343,18 +393,28 @@ class AgenticRAG:
             print(f"\n{'=' * 80}\n")
         
         return final_answer
+    
+    def close(self):
+        """关闭线程池资源"""
+        if hasattr(self, 'thread_pool'):
+            self.thread_pool.shutdown(wait=True)
+            print("\n线程池已关闭")
 
 
 async def main():
     """主函数：运行 Agentic RAG 系统"""
-    # 初始化 RAG Agent
-    rag = AgenticRAG()
+    # 初始化 RAG Agent（设置 max_workers=4 进行并行处理）
+    rag = AgenticRAG(max_workers=4)
     
-    # 定义测试查询
-    test_query = "光明区有什么面包小吃店吗？人均消费怎么样？"
-    
-    # 运行完整的 RAG 流水线
-    await rag.run(test_query)
+    try:
+        # 定义测试查询
+        test_query = "光明区有什么文化建筑？因什么而闻名？"
+        
+        # 运行完整的 RAG 流水线
+        await rag.run(test_query)
+    finally:
+        # 确保关闭线程池资源
+        rag.close()
 
 
 if __name__ == "__main__":

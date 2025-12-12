@@ -1,0 +1,19 @@
+# Core dependencies
+agno>=0.1.0
+openai>=1.0.0
+python-dotenv>=1.0.0
+
+# Retrieval dependencies
+rank-bm25>=0.2.2
+jieba>=0.42.1
+sentence-transformers>=2.2.0
+faiss-cpu>=1.7.4
+FlagEmbedding>=1.1.0
+
+# Document processing
+python-docx>=0.8.11
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# WebUI
+gradio>=4.0.0
